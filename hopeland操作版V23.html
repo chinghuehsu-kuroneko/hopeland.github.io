@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>希望島 2027：互動設計沙盤 v23</title>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.10/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #f1f5f9; font-family: 'Noto Sans TC', sans-serif; height: 100vh; overflow: hidden; margin: 0; touch-action: manipulation; }
+        
+        /* 使用指定的改造前島嶼地圖 (PNG) */
+        .map-bg { 
+            background-image: url('Gemini_Generated_Image_fd56hefd56hefd56.png'); 
+            background-size: cover; 
+            background-position: center; 
+            border: 8px solid white;
+            background-color: #a5f3fc; 
+        }
+        
+        .glass { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(12px); }
+        .draggable-item { cursor: grab; touch-action: none; transition: all 0.2s; }
+        .draggable-item:active { cursor: grabbing; transform: scale(1.1); }
+        
+        @keyframes error-blink { 
+            0%, 100% { border-color: transparent; } 
+            50% { border-color: #ef4444; background: rgba(239, 68, 68, 0.2); } 
+        }
+        .placement-error { animation: error-blink 1s infinite; border: 4px solid #ef4444 !important; }
+        .char-label { font-size: 14px; font-weight: 900; line-height: 1; margin-top: 2px; }
+        
+        @keyframes slot-roll {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(-600px); }
+        }
+        .lottery-rolling { animation: slot-roll 0.15s linear infinite; }
+
+        @keyframes alert-bounce-in {
+            0% { transform: translate(-50%, -100%) scale(0.5); opacity: 0; }
+            70% { transform: translate(-50%, 15%) scale(1.1); opacity: 1; }
+            100% { transform: translate(-50%, 0) scale(1); opacity: 1; }
+        }
+        .mission-popup { 
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            z-index: 9999;
+            animation: alert-bounce-in 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; 
+        }
+        
+        @media (max-width: 1024px) {
+            .right-panel { width: 380px; padding: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 核心數據：對齊簡報 v23 規格
+        const PROJECTS = [
+            { id: 'off_wind', name: '離岸風機', label: '離', cost: 1.5, power: 60, storage: 0, icon: 'Wind', color: 'text-teal-500', bg: 'bg-teal-500', zone: 'sea' },
+            { id: 'land_wind', name: '陸域風機', label: '陸', cost: 0.5, power: 15, storage: 0, icon: 'Tornado', color: 'text-emerald-600', bg: 'bg-emerald-600', zone: 'land' },
+            { id: 'solar_farm', name: '大型光電', label: '光', cost: 1.2, power: 45, storage: 0, icon: 'Sun', color: 'text-amber-500', bg: 'bg-amber-500', zone: 'land' },
+            { id: 'roof_solar', name: '屋頂光電', label: '屋', cost: 0.2, power: 5, storage: 0, icon: 'Home', color: 'text-orange-500', bg: 'bg-orange-500', zone: 'land' },
+            { id: 'wave_power', name: '波浪能站', label: '波', cost: 1.0, power: 25, storage: 0, icon: 'Waves', color: 'text-indigo-600', bg: 'bg-indigo-600', zone: 'sea' },
+            { id: 'battery', name: '儲能站', label: '儲', cost: 0.8, power: 0, storage: 40, icon: 'BatteryCharging', color: 'text-rose-500', bg: 'bg-rose-500', zone: 'land' },
+            { id: 'smart_grid', name: '智慧電網', label: '智', cost: 0.4, power: 0, storage: 0, icon: 'Cpu', color: 'text-violet-600', bg: 'bg-violet-600', zone: 'land' }
+        ];
+
+        const ROLES = [
+            { id: 'eco', name: '生態保育官', emoji: '🦅', target: '保護候鳥', hint: '東岸海域嚴禁放置風機' },
+            { id: 'econ', name: '經濟部長', emoji: '💰', target: '產能極大化', hint: '電力產出需有充足餘裕' },
+            { id: 'tour', name: '觀光局長', emoji: '🏖️', target: '美感與靜音', hint: '西岸禁止大型機械設施' },
+            { id: 'village', name: '漁村里長', emoji: '🐟', target: '電力絕對穩定', hint: '儲電容量必須充足' }
+        ];
+
+        const MISSIONS = [
+            { id: 'typhoon', name: '強颱襲擊', desc: '風機停機(0)，光電板損毀 50%', emoji: '🌪️' },
+            { id: 'birds', name: '候鳥遷徙', desc: '夜間禁止風機運轉(僅剩波浪能+儲能)', emoji: '🦢' },
+            { id: 'heatwave', name: '觀光熱浪', desc: '電力需求提升至 130 單位', emoji: '🔥' },
+            { id: 'corrosion', name: '海水鏽蝕', desc: '波浪能站全線停機維修', emoji: '⚙️' },
+            { id: 'chain', name: '零件斷鏈', desc: '離岸風機發電效率下降 30%', emoji: '🔗' },
+            { id: 'eco_order', name: '生態保育令', desc: '東岸設施產量減少 40%', emoji: '📜' }
+        ];
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (window.lucide && iconRef.current) {
+                    const iconName = name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+                    if (lucide.icons[iconName]) {
+                        iconRef.current.innerHTML = lucide.icons[iconName].toSvg({ strokeWidth: 2, width: size, height: size, class: className });
+                    }
+                }
+            }, [name, size, className]);
+            return <span ref={iconRef} className="inline-flex"></span>;
+        };
+
+        const App = () => {
+            const [step, setStep] = useState(1);
+            const [role, setRole] = useState(null);
+            const [mission, setMission] = useState(null);
+            const [isRolling, setIsRolling] = useState(false);
+            const [budget, setBudget] = useState(5.0);
+            const [inventory, setInventory] = useState({});
+            const [placedItems, setPlacedItems] = useState([]);
+            const [quantities, setQuantities] = useState({});
+            const [testResult, setTestResult] = useState(null);
+
+            const [secondsElapsed, setSecondsElapsed] = useState(0);
+            const [missionDrawn, setMissionDrawn] = useState(false);
+            const [showMissionAlert, setShowMissionAlert] = useState(false);
+
+            const dragItem = useRef();
+
+            const handleDragStart = (e, typeId) => {
+                dragItem.current = typeId;
+                if (e.type === 'touchstart') {
+                    document.body.style.overflow = 'hidden';
+                }
+            };
+
+            const handleDragEnd = (e) => {
+                dragItem.current = null;
+                if (e.type === 'touchend') {
+                    document.body.style.overflow = 'auto';
+                }
+            };
+
+             const handleDrop = (e) => {
+                e.preventDefault();
+                const typeId = dragItem.current;
+                if (!typeId) {
+                    // 嘗試從 DataTransfer 獲取 (相容傳統拖曳)
+                    const dtId = e.dataTransfer.getData("typeId");
+                    if (dtId) dragItem.current = dtId;
+                }
+                
+                const finalId = dragItem.current;
+                if (finalId && inventory[finalId] > 0) {
+                    const mapRect = e.currentTarget.getBoundingClientRect();
+                    let clientX, clientY;
+                    
+                    if (e.type === 'drop') {
+                        clientX = e.clientX;
+                        clientY = e.clientY;
+                    } else if (e.type === 'touchend') {
+                        clientX = e.changedTouches[0].clientX;
+                        clientY = e.changedTouches[0].clientY;
+                    }
+
+                    const x = ((clientX - mapRect.left) / mapRect.width) * 100;
+                    const y = ((clientY - mapRect.top) / mapRect.height) * 100;
+
+                    if (x >= 0 && x <= 100 && y >= 0 && y <= 100) {
+                        setPlacedItems([...placedItems, { id: Date.now(), x, y, typeId: finalId }]);
+                        setInventory({...inventory, [finalId]: inventory[finalId]-1});
+                    }
+                }
+                handleDragEnd(e);
+            };
+
+            const startLottery = () => {
+                setIsRolling(true);
+                setTimeout(() => {
+                    setRole(ROLES[Math.floor(Math.random() * ROLES.length)]);
+                    setIsRolling(false);
+                }, 1500);
+            };
+
+            useEffect(() => {
+                let timer;
+                if (step === 2) {
+                    timer = setInterval(() => {
+                        setSecondsElapsed(prev => {
+                            const current = prev + 1;
+                            if (current === 30 && !missionDrawn) {
+                                const m = MISSIONS[Math.floor(Math.random() * MISSIONS.length)];
+                                setMission(m);
+                                setMissionDrawn(true);
+                                setShowMissionAlert(true);
+                                setTimeout(() => setShowMissionAlert(false), 8000);
+                            }
+                            return current;
+                        });
+                    }, 1000);
+                }
+                return () => clearInterval(timer);
+            }, [step, missionDrawn]);
+
+            const resetToHome = () => { 
+                setStep(1); setRole(null); setMission(null); setBudget(5.0); 
+                setInventory({}); setPlacedItems([]); setTestResult(null); 
+                setSecondsElapsed(0); setMissionDrawn(false); setShowMissionAlert(false);
+            };
+
+            const getEngineStats = () => {
+                let totalP = 0; let totalS = 0; let errorCount = 0;
+                let hasGrid = placedItems.some(i => i.typeId === 'smart_grid');
+                placedItems.forEach(item => {
+                    const p = PROJECTS.find(proj => proj.id === item.typeId);
+                    const isSea = (item.y < 20 || item.y > 80 || item.x < 20 || item.x > 80);
+                    const currentZone = isSea ? 'sea' : 'land';
+                    let output = p.power;
+                    if (p.zone !== currentZone) { output = 0; errorCount++; }
+                    if (mission?.id === 'eco_order' && item.x > 66) { output *= 0.6; }
+                    totalP += output;
+                    totalS += p.storage;
+                });
+                if (hasGrid) totalP *= 1.15;
+                return { p: Math.round(totalP), s: totalS, errors: errorCount };
+            };
+
+            const runPressureTest = () => {
+                if (secondsElapsed < 40) return; 
+                const stats = getEngineStats();
+                const gridF = placedItems.some(i => i.typeId === 'smart_grid') ? 1.15 : 1.0;
+                let score = 100;
+                let pros = []; let cons = []; let npcFeedback = [];
+                const baseDemand = mission?.id === 'heatwave' ? 130 : 100;
+                
+                if (role?.id === 'eco') {
+                    if (placedItems.some(i => i.x > 66 && i.typeId.includes('wind'))) { score -= 40; cons.push("違反東岸生態保護紅線"); npcFeedback.push("小綠保育員：風機影響候鳥飛行，生態遭受打擊。"); }
+                    else { pros.push("成功守護東岸生態紅線"); npcFeedback.push("小綠保育員：謝謝你們讓候鳥有安全的家！"); }
+                } else if (role?.id === 'tour') {
+                    if (placedItems.some(i => i.x < 33 && (i.typeId.includes('wind') || i.typeId === 'solar_farm'))) { score -= 40; cons.push("西岸景觀遭到破壞"); npcFeedback.push("夕陽姐：遊客說風景被機器擋住了，很可惜..."); }
+                    else { pros.push("西岸環境融合美感極佳"); npcFeedback.push("夕陽姐：夕陽與海面依然迷人，專業的設計！"); }
+                } else if (role?.id === 'village') {
+                    if (stats.s < 40) { score -= 30; cons.push("儲能設施不足，供電不穩"); npcFeedback.push("里長伯：跳電會讓電器壞掉，希望電力能更穩定。"); }
+                    else { pros.push("儲能充足，電力穩定"); npcFeedback.push("里長伯：現在用電很安心，大家都覺得不錯。"); }
+                }
+
+                let survivalP = 0;
+                const typeP = (f) => placedItems.filter(i => i.typeId.includes(f)).reduce((acc, i) => acc + PROJECTS.find(p => p.id === i.typeId).power, 0) * gridF;
+                if (mission?.id === 'typhoon') survivalP = Math.round((stats.p - typeP('wind')) + (typeP('solar') * 0.5) + stats.s);
+                else if (mission?.id === 'birds') survivalP = Math.round(typeP('wave_power') + stats.s);
+                else if (mission?.id === 'corrosion') survivalP = Math.round((stats.p - typeP('wave_power')) + stats.s);
+                else if (mission?.id === 'chain') survivalP = Math.round((stats.p - (typeP('off_wind') * 0.3)) + stats.s);
+                else survivalP = stats.p + stats.s;
+
+                if (survivalP < baseDemand) { score -= 50; cons.push(`未能撐過「${mission?.name}」電力缺口`); npcFeedback.push(`防災中心：在${mission?.name}期間電力中斷，造成了部分損失。`); } 
+                else { pros.push(`成功通過「${mission?.name}」考驗`); }
+                
+                if (budget < 0) { score = 0; cons.push("專案預算嚴重超支"); }
+                if (stats.errors > 0) cons.push(`${stats.errors} 個設施位置錯誤(無發電)`);
+                if (stats.p > baseDemand * 1.5) pros.push("電力產出充裕且具有餘裕");
+
+                setTestResult({ totalScore: Math.max(0, score), pros, cons, npc: npcFeedback, survivalP, baseDemand });
+            };
+
+            if (step === 1) return (
+                <div className="flex flex-col items-center justify-center h-screen bg-slate-900 text-white p-10 select-none text-center">
+                    <h1 className="text-5xl md:text-6xl font-black mb-12 text-teal-400 italic tracking-tighter">希望島 2027 <br/><span className="text-3xl not-italic text-white/80">能源轉型設計沙盤 v23</span></h1>
+                    <div className="bg-white/10 p-8 md:p-12 rounded-[40px] md:rounded-[60px] border-2 border-white/20 max-w-xl w-full shadow-2xl relative overflow-hidden">
+                        <h2 className="text-xl md:text-2xl font-bold mb-8 text-teal-300 opacity-80">顧問身份隨機抽籤</h2>
+                        <div className="h-40 md:h-48 flex items-center justify-center mb-10 bg-slate-800 rounded-3xl relative overflow-hidden border-4 border-slate-700">
+                            {isRolling ? (
+                                <div className="text-8xl md:text-9xl lottery-rolling flex flex-col gap-8 md:gap-12">
+                                    {ROLES.map(r => <span key={r.id}>{r.emoji}</span>)}
+                                    {ROLES.map(r => <span key={r.id + '2'}>{r.emoji}</span>)}
+                                </div>
+                            ) : role ? (
+                                <div className="flex flex-col items-center animate-bounce">
+                                    <div className="text-7xl md:text-8xl mb-2 md:mb-4">{role.emoji}</div>
+                                    <div className="text-2xl md:text-3xl font-black text-teal-300">{role.name}</div>
+                                    <div className="text-sm text-teal-500/80 mt-2 font-bold tracking-widest">目標：{role.target}</div>
+                                </div>
+                            ) : (
+                                <div className="text-slate-500 text-lg font-medium">點擊下方按鈕啟動顧問任務...</div>
+                            )}
+                        </div>
+                        {!role ? (
+                            <button onClick={startLottery} disabled={isRolling} className="w-full bg-teal-500 text-white py-4 md:py-5 rounded-3xl font-black text-xl md:text-2xl hover:bg-teal-400 active:scale-95 transition shadow-lg">啟動委任抽籤</button>
+                        ) : (
+                            <button onClick={() => setStep(2)} className="w-full bg-gradient-to-r from-teal-400 to-blue-500 text-white py-4 md:py-5 rounded-3xl font-black text-xl md:text-2xl shadow-xl animate-pulse active:scale-95 transition">進入建設沙盤</button>
+                        )}
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-slate-100 select-none">
+                    <div className="flex-1 relative flex flex-col p-4 gap-4">
+                        <div className="flex flex-col md:flex-row justify-between items-center glass p-4 rounded-[32px] shadow-lg border border-white/50 gap-3">
+                            <div className="flex gap-3 items-center w-full md:w-auto">
+                                <div className="bg-white/80 px-3 py-2 rounded-2xl shadow-sm border font-bold text-slate-800 flex items-center gap-2 whitespace-nowrap">
+                                    <span className="text-2xl">{role?.emoji}</span> {role?.name}
+                                </div>
+                                <div className="flex items-center gap-2 flex-1 md:flex-none">
+                                    {mission ? (
+                                        <div className="bg-rose-100/80 px-3 py-2 rounded-2xl shadow-sm border border-rose-200 text-rose-600 font-black animate-pulse flex items-center gap-2 w-full md:w-auto overflow-hidden text-ellipsis whitespace-nowrap">
+                                            <Icon name="TriangleAlert" className="text-rose-500" size={18}/> <span className="truncate">{mission?.name}</span>
+                                        </div>
+                                    ) : (
+                                        <div className="bg-slate-100/80 px-3 py-2 rounded-2xl border border-slate-200 text-slate-400 font-bold flex items-center gap-2 whitespace-nowrap">
+                                            <Icon name="Timer" size={16}/> 挑戰倒數: {Math.max(0, 30 - secondsElapsed)}s
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-4 w-full md:w-auto justify-end">
+                                <div className="text-right hidden md:block">
+                                    <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-none mb-1">結案解鎖</div>
+                                    <div className={`font-mono font-black text-xl leading-none ${secondsElapsed >= 40 ? 'text-teal-500' : 'text-slate-400'}`}>
+                                        {secondsElapsed >= 40 ? 'READY' : `00:${(40 - secondsElapsed).toString().padStart(2,'0')}`}
+                                    </div>
+                                </div>
+                                <div className={`text-3xl md:text-4xl font-mono font-black ${budget < 0 ? 'text-rose-500' : 'text-teal-600'} whitespace-nowrap`}>{budget.toFixed(1)} <span className="text-lg">億</span></div>
+                                <button onClick={resetToHome} className="bg-slate-800 text-white p-3 rounded-2xl hover:bg-slate-700 shadow-md active:scale-95 transition"><Icon name="RotateCcw" size={20}/></button>
+                            </div>
+                        </div>
+
+                        <div 
+                            className="flex-1 map-bg rounded-[40px] shadow-inner relative overflow-hidden touch-none" 
+                            onDragOver={e=>e.preventDefault()} 
+                            onDrop={handleDrop}
+                            onTouchEnd={handleDrop}
+                        >
+                            <div className="absolute inset-x-0 top-0 h-[20%] bg-blue-400/10 flex items-center justify-center pointer-events-none text-blue-800/20 font-black text-4xl md:text-6xl italic tracking-widest uppercase">Sea Area</div>
+                            <div className="absolute inset-x-0 bottom-0 h-[20%] bg-blue-400/10 flex items-center justify-center pointer-events-none text-blue-800/20 font-black text-4xl md:text-6xl italic tracking-widest uppercase">Sea Area</div>
+                            
+                            {placedItems.map(item => {
+                                const p = PROJECTS.find(proj => proj.id === item.typeId);
+                                const isSea = (item.y < 20 || item.y > 80 || item.x < 20 || item.x > 80);
+                                const hasError = p.zone !== (isSea ? 'sea' : 'land');
+                                return <div key={item.id} style={{ left: `${item.x}%`, top: `${item.y}%` }} 
+                                    className={`absolute -translate-x-1/2 -translate-y-1/2 p-2 bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border-[3px] ${hasError ? 'placement-error' : p.color.replace('text-', 'border-')} group transition-all z-10 hover:scale-125 flex flex-col items-center select-none`}>
+                                    <Icon name={p.icon} className={p.color} size={28} />
+                                    <span className={`char-label ${p.color}`}>{p.label}</span>
+                                    {hasError && <span className="absolute -bottom-6 bg-rose-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap shadow-sm">區域不符!</span>}
+                                    <button onTouchStart={(e)=>e.stopPropagation()} onClick={(e)=> { e.stopPropagation(); setPlacedItems(placedItems.filter(i=>i.id!==item.id)); setInventory({...inventory, [item.typeId]:(inventory[item.typeId]||0)+1}) }} className="absolute -top-3 -right-3 bg-rose-500 text-white rounded-full w-7 h-7 font-black flex items-center justify-center shadow-sm border-2 border-white transition-transform active:scale-90">×</button>
+                                </div>
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="right-panel w-[320px] md:w-[400px] glass p-6 overflow-y-auto flex flex-col gap-5 shadow-xl border-l border-white/50 text-slate-800 z-20">
+                        <div className="flex justify-between items-center">
+                            <h3 className="text-xl font-black italic flex items-center gap-2 tracking-tighter uppercase"><Icon name="ShoppingCart" size={20}/> 採購清單 (5.0億)</h3>
+                            <button onClick={()=>{setInventory({});setPlacedItems([]);setBudget(5.0)}} className="bg-rose-100 text-rose-600 px-3 py-1.5 rounded-xl text-xs font-black hover:bg-rose-500 hover:text-white transition flex items-center gap-1"><Icon name="RotateCcw" size={14}/> 重置</button>
+                        </div>
+                        
+                        <div className="space-y-2">
+                            {PROJECTS.map(p => (
+                                <div key={p.id} className="bg-white/80 p-3 rounded-3xl border shadow-sm flex justify-between items-center gap-3 group hover:border-slate-400 transition-colors">
+                                    <div className="flex items-center gap-2">
+                                        <div className={`${p.bg} text-white p-2 rounded-xl shadow-inner`}><Icon name={p.icon} size={18}/></div>
+                                        <div>
+                                            <div className="font-bold text-sm leading-none mb-1">{p.name}</div>
+                                            <div className="text-[10px] text-slate-500 font-black tracking-tight uppercase">{p.power}kW | {p.cost}億 | 庫存:{inventory[p.id]||0}</div>
+                                        </div>
+                                    </div>
+                                    <button onClick={()=>{
+                                        if (budget >= p.cost) { 
+                                            setBudget(prev => Math.round((prev - p.cost)*10)/10); 
+                                            setInventory({...inventory, [p.id]: (inventory[p.id]||0) + 1});
+                                        }
+                                    }} className={`${p.bg} text-white px-4 py-1.5 rounded-xl text-xs font-black shadow-sm active:scale-90 transition-transform group-hover:scale-105 uppercase`}>購買</button>
+                                </div>
+                            ))}
+                        </div>
+                        
+                        <div className="bg-slate-100/80 p-4 rounded-[32px] border-4 border-dashed border-slate-300 flex flex-wrap gap-3 items-center justify-center min-h-[140px] relative">
+                            {(Object.values(inventory).every(v => !v || v === 0)) && <div className="absolute text-slate-400 font-bold text-sm pointer-events-none text-center italic leading-tight">請先購買能源設備<br/>再將設備拖入島嶼</div>}
+                            {PROJECTS.map(p => (inventory[p.id]||0) > 0 && 
+                                <div key={p.id} 
+                                    draggable 
+                                    onDragStart={(e)=> { dragItem.current = p.id; e.dataTransfer.setData("typeId", p.id); }}
+                                    onTouchStart={(e)=> { dragItem.current = p.id; handleDragStart(e, p.id); }}
+                                    className={`draggable-item bg-white p-3 rounded-2xl shadow-md border-2 ${p.color.replace('text-', 'border-')} relative flex flex-col items-center w-16 h-16 justify-center hover:scale-110`}>
+                                    <Icon name={p.icon} className={p.color} size={24}/>
+                                    <span className="absolute -top-2 -right-2 bg-slate-800 text-white text-[10px] w-6 h-6 rounded-full flex items-center justify-center font-black border-2 border-white shadow-sm">x{inventory[p.id]}</span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-auto border-t border-slate-200 pt-4 text-center">
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                <div className="bg-white/80 p-2 rounded-2xl shadow-sm border"><div className="text-[8px] opacity-60 font-black uppercase tracking-tighter leading-none">發電總計</div><div className="font-black text-lg mt-1">{getEngineStats().p}</div></div>
+                                <div className="bg-white/80 p-2 rounded-2xl shadow-sm border"><div className="text-[8px] opacity-60 font-black uppercase tracking-tighter leading-none">目標需求</div><div className="font-black text-lg mt-1 text-teal-600">{mission?.id==='heatwave'?130:100}</div></div>
+                                <div className="bg-white/80 p-2 rounded-2xl shadow-sm border"><div className="text-[8px] opacity-60 font-black uppercase tracking-tighter leading-none">儲能總計</div><div className="font-black text-lg mt-1 text-rose-500">{getEngineStats().s}</div></div>
+                            </div>
+                            <button 
+                                onClick={runPressureTest} 
+                                disabled={secondsElapsed < 40}
+                                className={`w-full py-4 rounded-[32px] font-black text-lg shadow-xl transition-all flex items-center justify-center gap-2 ${secondsElapsed >= 40 ? 'bg-slate-900 text-white hover:bg-teal-500 active:scale-95' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
+                            >
+                                <Icon name={secondsElapsed >= 40 ? "ClipboardCheck" : "Lock"} size={20}/>
+                                {secondsElapsed >= 40 ? "提交顧問報告" : `設計優化中 (${40 - secondsElapsed}s)`}
+                            </button>
+                        </div>
+                    </div>
+
+                    {showMissionAlert && mission && (
+                        <div className="mission-popup pointer-events-none">
+                            <div className="bg-white/95 backdrop-blur-md p-8 rounded-[48px] shadow-[0_35px_60px_-15px_rgba(244,63,94,0.3)] border-4 border-rose-500 text-center max-w-sm mx-4">
+                                <div className="text-7xl mb-2 animate-bounce">{mission.emoji}</div>
+                                <h2 className="text-2xl font-black text-rose-600 mb-1 tracking-tighter">突發考驗：{mission.name}</h2>
+                                <p className="text-base text-slate-600 font-bold leading-tight bg-rose-50 p-4 rounded-2xl">{mission.desc}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {testResult && (
+                        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/90 backdrop-blur-md p-4 md:p-10 overflow-y-auto">
+                            <div className="bg-white rounded-[60px] md:rounded-[80px] p-10 md:p-20 max-w-5xl w-full text-center relative shadow-2xl my-auto border-8 border-white/50">
+                                <div className={`absolute top-0 left-0 w-full h-12 ${testResult.totalScore >= 70 ? 'bg-teal-500' : 'bg-rose-500'}`}></div>
+                                <h2 className="text-3xl md:text-5xl font-black mb-6 text-slate-800 tracking-tighter mt-8 md:mt-0 leading-tight">希望島能源顧問審查報告</h2>
+                                <div className="text-[100px] md:text-[160px] font-black text-slate-900 leading-none mb-10 tracking-tighter">
+                                    {testResult.totalScore} <span className="text-2xl md:text-4xl text-slate-300 ml-[-20px] uppercase font-bold tracking-widest">pts</span>
+                                </div>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-10 text-left mb-12">
+                                    <div className="bg-slate-50 p-6 md:p-10 rounded-[40px] md:rounded-[60px] border-2 border-slate-100 flex flex-col gap-6 shadow-sm">
+                                        <h4 className="text-xl md:text-2xl font-black text-slate-700 underline decoration-teal-400">📋 工程技術評點 (優缺點)</h4>
+                                        <div className="space-y-4 font-bold leading-relaxed">
+                                            {testResult.totalScore >= 80 ? (
+                                                <p className="text-teal-600 text-lg md:text-xl italic">「出色的工程佈局！在預算與災後韌性間取得了極佳平衡。」</p>
+                                            ) : (
+                                                <p className="text-rose-500 text-lg md:text-xl italic">「設計仍有漏洞，未充分考慮環境限制或電力產能缺口。」</p>
+                                            )}
+                                            <div className="space-y-2">
+                                                {testResult.pros.map((p,i)=><div key={i} className="text-teal-700 text-sm md:text-base flex items-start gap-2"><span>✓</span> {p}</div>)}
+                                                {testResult.cons.map((c,i)=><div key={i} className="text-rose-500 text-sm md:text-base flex items-start gap-2"><span>✗</span> {c}</div>)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-teal-50 p-6 md:p-10 rounded-[40px] md:rounded-[60px] border-2 border-teal-100 flex flex-col gap-6 shadow-sm font-bold">
+                                        <h4 className="text-xl md:text-2xl font-black text-teal-700 underline decoration-amber-400">🏙️ 各界心聲評語</h4>
+                                        <div className="space-y-4">
+                                            {testResult.npc.map((q,i)=>(
+                                                <div key={i} className="italic text-slate-700 bg-white/70 p-4 md:p-6 rounded-3xl relative shadow-sm border border-teal-100 text-sm md:text-base leading-tight">
+                                                    <span className="text-4xl text-teal-300 absolute -top-4 -left-3 opacity-60">"</span>
+                                                    {q}
+                                                </div>
+                                            ))}
+                                            {testResult.totalScore >= 95 && <div className="text-teal-800 font-black text-center text-lg md:text-xl animate-bounce pt-4">🌟 全島里民將您的團隊視為能源英雄！</div>}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+                                    <button onClick={()=>setTestResult(null)} className="flex-1 bg-slate-100 py-4 md:py-6 rounded-[40px] font-black text-xl md:text-2xl hover:bg-slate-200 active:scale-95 transition shadow-lg">返回沙盤優化</button>
+                                    <button onClick={resetToHome} className="flex-1 bg-slate-900 text-white py-4 md:py-6 rounded-[40px] font-black text-xl md:text-2xl shadow-xl active:scale-95 transition hover:bg-slate-800">重新啟動委任</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
